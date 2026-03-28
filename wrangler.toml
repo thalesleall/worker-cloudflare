@@ -1,0 +1,6 @@
+name = "mcp-bearer-proxy"
+main = "src/index.js"
+compatibility_date = "2026-03-28"
+
+[vars]
+TARGET_BASE_URL = "https://mcp-n8n.thalesleal.icu"
