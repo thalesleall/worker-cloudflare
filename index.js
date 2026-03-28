@@ -2,84 +2,63 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
 
-    // Opcional: endpoint simples para validar se o Worker está vivo
+    if (request.method === "OPTIONS") {
+      return new Response(null, {
+        status: 204,
+        headers: corsHeaders(),
+      });
+    }
+
     if (url.pathname === "/__worker_health") {
-      return json(
+      return Response.json(
         {
           ok: true,
-          worker: "up",
-          target: env.TARGET_BASE_URL,
+          hasTarget: !!env.TARGET_BASE_URL,
+          hasToken: !!env.MCP_BEARER_TOKEN,
+          tokenLength: env.MCP_BEARER_TOKEN ? env.MCP_BEARER_TOKEN.length : 0,
         },
-        200
+        { headers: corsHeaders() }
       );
     }
 
-    // Monte a URL de destino preservando path + querystring
     const targetUrl = new URL(url.pathname + url.search, env.TARGET_BASE_URL);
 
-    // Copia os headers recebidos
     const headers = new Headers(request.headers);
-
-    // Injeta o Bearer token que o n8n-mcp espera
     headers.set("Authorization", `Bearer ${env.MCP_BEARER_TOKEN}`);
+    headers.delete("host");
 
-    // Ajusta Host para evitar problemas em alguns origins
-    headers.delete("Host");
-
-    // Repassa a requisição
-    const upstreamRequest = new Request(targetUrl.toString(), {
+    const init = {
       method: request.method,
       headers,
-      body: request.body,
       redirect: "manual",
-    });
+    };
 
-    let upstreamResponse;
-    try {
-      upstreamResponse = await fetch(upstreamRequest);
-    } catch (error) {
-      return json(
-        {
-          ok: false,
-          error: "upstream_unreachable",
-          message: String(error),
-          target: targetUrl.toString(),
-        },
-        502
-      );
+    if (request.method !== "GET" && request.method !== "HEAD") {
+      init.body = await request.arrayBuffer();
     }
 
-    // Copia a resposta do origin
-    const responseHeaders = new Headers(upstreamResponse.headers);
+    const upstream = await fetch(targetUrl.toString(), init);
 
-    // CORS opcional para facilitar testes no navegador
-    responseHeaders.set("Access-Control-Allow-Origin", "*");
-    responseHeaders.set(
-      "Access-Control-Allow-Methods",
-      "GET, POST, OPTIONS"
-    );
-    responseHeaders.set(
-      "Access-Control-Allow-Headers",
-      "Authorization, Content-Type, Accept, Mcp-Session-Id, Last-Event-ID"
-    );
+    const outHeaders = new Headers(upstream.headers);
+    for (const [k, v] of Object.entries(corsHeaders())) {
+      outHeaders.set(k, v);
+    }
 
-    return new Response(upstreamResponse.body, {
-      status: upstreamResponse.status,
-      statusText: upstreamResponse.statusText,
-      headers: responseHeaders,
+    return new Response(upstream.body, {
+      status: upstream.status,
+      statusText: upstream.statusText,
+      headers: outHeaders,
     });
   },
 };
 
-function json(data, status = 200) {
-  return new Response(JSON.stringify(data, null, 2), {
-    status,
-    headers: {
-      "content-type": "application/json; charset=utf-8",
-      "access-control-allow-origin": "*",
-      "access-control-allow-methods": "GET, POST, OPTIONS",
-      "access-control-allow-headers":
-        "Authorization, Content-Type, Accept, Mcp-Session-Id, Last-Event-ID",
-    },
-  });
+function corsHeaders() {
+  return {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+    "Access-Control-Allow-Headers":
+      "Authorization, Content-Type, Accept, Mcp-Session-Id, Last-Event-ID",
+    "Access-Control-Expose-Headers": "Mcp-Session-Id",
+    "Access-Control-Max-Age": "86400",
+  };
 }
